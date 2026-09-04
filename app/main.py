@@ -1,24 +1,23 @@
-from app.scanner.file_scanner import FileScanner
-from app.scanner.metadata import MetadataExtractor
+from app.services.scan_service import ScanService
 
 
 def main():
-    scanner = FileScanner()
-    metadata_extractor = MetadataExtractor()
+    scan_service = ScanService()
 
     directory_path = input(
         "Enter the folder path you want to scan: "
     ).strip()
 
     try:
-        files = scanner.scan_directory(directory_path)
+        result = scan_service.scan(directory_path)
 
         print("\nScan completed successfully.")
-        print(f"Supported files found: {len(files)}\n")
+        print(
+            f"Supported files found: "
+            f"{result.successful_count}"
+        )
 
-        for file_path in files:
-            metadata = metadata_extractor.extract(file_path)
-
+        for metadata in result.files:
             print("-" * 60)
             print(f"Name: {metadata.file_name}")
             print(f"Path: {metadata.file_path}")
@@ -28,6 +27,25 @@ def main():
             print(f"Modified: {metadata.modified_at}")
             print(f"Accessed: {metadata.accessed_at}")
             print(f"MIME Type: {metadata.mime_type}")
+
+        print("\nScan Summary")
+        print(
+            f"Successfully processed: "
+            f"{result.successful_count}"
+        )
+        print(
+            f"Failed to process: "
+            f"{result.failed_count}"
+        )
+
+        if result.errors:
+            print("\nErrors:")
+
+            for scan_error in result.errors:
+                print(
+                    f"- {scan_error.file_path}: "
+                    f"{scan_error.error_message}"
+                )
 
     except (
         FileNotFoundError,
