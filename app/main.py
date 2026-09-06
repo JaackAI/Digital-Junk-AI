@@ -12,6 +12,7 @@ def main():
         result = scan_service.scan(directory_path)
 
         print("\nScan completed successfully.")
+        print(f"Scan ID: {result.scan_id}")
         print(
             f"Supported files found: "
             f"{result.successful_count}"

@@ -1,28 +1,21 @@
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
 from app.scanner.file_scanner import FileScanner
 from app.scanner.metadata import FileMetadata, MetadataExtractor
+from app.database.database import Database
 
 
 @dataclass
 class ScanError:
-    """
-    Represents an error that occurred while processing a file.
-    """
-
     file_path: str
     error_message: str
 
 
 @dataclass
 class ScanResult:
-    """
-    Represents the result of scanning a directory.
-    """
-
-    files: list[FileMetadata] = field(default_factory=list)
-    errors: list[ScanError] = field(default_factory=list)
+    files: list[FileMetadata]
+    errors: list[ScanError]
+    scan_id: int | None = None
 
     @property
     def successful_count(self) -> int:
@@ -34,47 +27,102 @@ class ScanResult:
 
 
 class ScanService:
-    """
-    Coordinates file scanning and metadata extraction.
-    """
 
     def __init__(
         self,
         scanner: FileScanner | None = None,
         metadata_extractor: MetadataExtractor | None = None,
+        database: Database | None = None,
     ):
         self.scanner = scanner or FileScanner()
         self.metadata_extractor = (
             metadata_extractor or MetadataExtractor()
         )
+        self.database = database or Database()
 
-    def scan(self, directory_path: str) -> ScanResult:
-        """
-        Scan a directory and extract metadata from supported files.
+        # Initialize database tables
+        self.database.initialize()
 
-        Args:
-            directory_path: Directory to scan.
+        # Add scan statistics columns
+        # to existing databases if required
+        self.database.migrate_scan_statistics()
 
-        Returns:
-            ScanResult containing successfully processed files
-            and processing errors.
-        """
+    def scan(self, directory: str) -> ScanResult:
 
-        file_paths = self.scanner.scan_directory(directory_path)
+        # --------------------------------------------------
+        # 1. Scan directory
+        # --------------------------------------------------
 
-        result = ScanResult()
+        file_paths = self.scanner.scan_directory(directory)
+
+        # --------------------------------------------------
+        # 2. Create scan record
+        # --------------------------------------------------
+
+        scan_id = self.database.create_scan(directory)
+
+        result = ScanResult(
+            files=[],
+            errors=[],
+            scan_id=scan_id,
+        )
+
+        # --------------------------------------------------
+        # 3. Extract metadata and save files
+        # --------------------------------------------------
 
         for file_path in file_paths:
+
             try:
-                metadata = self.metadata_extractor.extract(file_path)
+                metadata = self.metadata_extractor.extract(
+                    file_path
+                )
+
                 result.files.append(metadata)
 
-            except (FileNotFoundError, PermissionError, OSError) as error:
+                self.database.save_file(
+                    scan_id=scan_id,
+                    metadata=metadata,
+                )
+
+            except (
+                FileNotFoundError,
+                PermissionError,
+                OSError,
+            ) as error:
+
                 result.errors.append(
                     ScanError(
                         file_path=str(file_path),
                         error_message=str(error),
                     )
                 )
+
+        # --------------------------------------------------
+        # 4. Calculate total file size
+        # --------------------------------------------------
+
+        total_size_bytes = sum(
+            metadata.size_bytes
+            for metadata in result.files
+        )
+
+        # --------------------------------------------------
+        # 5. Update scan statistics
+        # --------------------------------------------------
+
+        self.database.update_scan_statistics(
+            scan_id=scan_id,
+            files_found=len(file_paths),
+            files_processed=result.successful_count,
+            files_failed=result.failed_count,
+            total_size_bytes=total_size_bytes,
+        )
+
+        # --------------------------------------------------
+        # 6. Mark scan as completed
+        # --------------------------------------------------
+
+        self.database.complete_scan(scan_id)
 
         return result
