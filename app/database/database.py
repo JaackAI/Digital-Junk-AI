@@ -483,3 +483,363 @@ class Database:
             "files_failed": row[6],
             "total_size_bytes": row[7],
         }
+        # ==================================================
+    # STORAGE ANALYTICS
+    # ==================================================
+
+    def get_storage_summary(self) -> dict:
+        """
+        Return overall storage statistics across all
+        successfully processed files.
+        """
+
+        with self.get_connection() as connection:
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_files,
+                    COALESCE(SUM(size_bytes), 0) AS total_size_bytes
+                FROM files
+                """
+            )
+
+            row = cursor.fetchone()
+
+        return {
+            "total_files": row[0],
+            "total_size_bytes": row[1],
+        }
+        # ==================================================
+    # LATEST SCAN STORAGE SUMMARY
+    # ==================================================
+
+    def get_latest_scan_storage_summary(self) -> dict:
+        """
+        Return storage statistics for the latest scan only.
+        """
+
+        with self.get_connection() as connection:
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_files,
+                    COALESCE(SUM(size_bytes), 0)
+                FROM files
+                WHERE scan_id = (
+                    SELECT id
+                    FROM scans
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
+                """
+            )
+
+            row = cursor.fetchone()
+
+        return {
+            "total_files": row[0],
+            "total_size_bytes": row[1],
+        }
+        # ==================================================
+    # STORAGE BY EXTENSION
+    # ==================================================
+
+    def get_storage_by_extension(self) -> list[dict]:
+        """
+        Return file count and total storage grouped
+        by file extension.
+        """
+
+        with self.get_connection() as connection:
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    extension,
+                    COUNT(*) AS file_count,
+                    COALESCE(SUM(size_bytes), 0) AS total_size_bytes
+                FROM files
+                GROUP BY extension
+                ORDER BY total_size_bytes DESC
+                """
+            )
+
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "extension": row[0],
+                "file_count": row[1],
+                "total_size_bytes": row[2],
+            }
+            for row in rows
+        ]
+        # ==================================================
+    # STORAGE BY CATEGORY
+    # ==================================================
+
+    def get_storage_by_category(self) -> list[dict]:
+        """
+        Return file count and total storage grouped
+        into logical file categories.
+        """
+
+        category_map = {
+            ".jpg": "Images",
+            ".jpeg": "Images",
+            ".png": "Images",
+            ".webp": "Images",
+            ".docx": "Documents",
+            ".txt": "Documents",
+            ".csv": "Documents",
+            ".xlsx": "Documents",
+            ".pdf": "PDFs",
+        }
+
+        with self.get_connection() as connection:
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    extension,
+                    COUNT(*) AS file_count,
+                    COALESCE(SUM(size_bytes), 0) AS total_size_bytes
+                FROM files
+                GROUP BY extension
+                ORDER BY total_size_bytes DESC
+                """
+            )
+
+            rows = cursor.fetchall()
+
+        categories = {}
+
+        for row in rows:
+            extension = row[0]
+            file_count = row[1]
+            total_size_bytes = row[2]
+
+            category = category_map.get(
+                extension.lower() if extension else "",
+                "Other",
+            )
+
+            if category not in categories:
+                categories[category] = {
+                    "category": category,
+                    "file_count": 0,
+                    "total_size_bytes": 0,
+                }
+
+            categories[category]["file_count"] += file_count
+            categories[category]["total_size_bytes"] += (
+                total_size_bytes
+            )
+
+        return sorted(
+            categories.values(),
+            key=lambda item: item["total_size_bytes"],
+            reverse=True,
+        )
+        # ==================================================
+    # LARGEST FILES
+    # ==================================================
+
+    def get_largest_files(
+        self,
+        limit: int = 10,
+    ) -> list[dict]:
+        """
+        Return the largest files stored in the database.
+
+        Args:
+            limit: Maximum number of files to return.
+
+        Returns:
+            List of file information ordered by size.
+        """
+
+        if limit <= 0:
+            return []
+
+        with self.get_connection() as connection:
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    scan_id,
+                    file_name,
+                    file_path,
+                    extension,
+                    size_bytes,
+                    created_at,
+                    modified_at,
+                    accessed_at,
+                    mime_type
+                FROM files
+                ORDER BY size_bytes DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "scan_id": row[1],
+                "file_name": row[2],
+                "file_path": row[3],
+                "extension": row[4],
+                "size_bytes": row[5],
+                "created_at": row[6],
+                "modified_at": row[7],
+                "accessed_at": row[8],
+                "mime_type": row[9],
+            }
+            for row in rows
+        ]
+        # ==================================================
+    # LATEST SCAN STORAGE BY CATEGORY
+    # ==================================================
+
+    def get_latest_scan_storage_by_category(self) -> list[dict]:
+        """
+        Return category-wise storage statistics
+        for the latest scan only.
+        """
+
+        category_map = {
+            ".jpg": "Images",
+            ".jpeg": "Images",
+            ".png": "Images",
+            ".webp": "Images",
+            ".docx": "Documents",
+            ".txt": "Documents",
+            ".csv": "Documents",
+            ".xlsx": "Documents",
+            ".pdf": "PDFs",
+        }
+
+        with self.get_connection() as connection:
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    extension,
+                    COUNT(*) AS file_count,
+                    COALESCE(SUM(size_bytes), 0)
+                FROM files
+                WHERE scan_id = (
+                    SELECT id
+                    FROM scans
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
+                GROUP BY extension
+                ORDER BY SUM(size_bytes) DESC
+                """
+            )
+
+            rows = cursor.fetchall()
+
+        categories = {}
+
+        for row in rows:
+            extension = row[0]
+            file_count = row[1]
+            total_size_bytes = row[2]
+
+            category = category_map.get(
+                extension.lower() if extension else "",
+                "Other",
+            )
+
+            if category not in categories:
+                categories[category] = {
+                    "category": category,
+                    "file_count": 0,
+                    "total_size_bytes": 0,
+                }
+
+            categories[category]["file_count"] += file_count
+            categories[category]["total_size_bytes"] += (
+                total_size_bytes
+            )
+
+        return sorted(
+            categories.values(),
+            key=lambda item: item["total_size_bytes"],
+            reverse=True,
+        )
+        # ==================================================
+    # LATEST SCAN LARGEST FILES
+    # ==================================================
+
+    def get_latest_scan_largest_files(
+        self,
+        limit: int = 10,
+    ) -> list[dict]:
+        """
+        Return the largest files from the latest scan only.
+        """
+
+        if limit <= 0:
+            return []
+
+        with self.get_connection() as connection:
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    scan_id,
+                    file_name,
+                    file_path,
+                    extension,
+                    size_bytes,
+                    created_at,
+                    modified_at,
+                    accessed_at,
+                    mime_type
+                FROM files
+                WHERE scan_id = (
+                    SELECT id
+                    FROM scans
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
+                ORDER BY size_bytes DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "scan_id": row[1],
+                "file_name": row[2],
+                "file_path": row[3],
+                "extension": row[4],
+                "size_bytes": row[5],
+                "created_at": row[6],
+                "modified_at": row[7],
+                "accessed_at": row[8],
+                "mime_type": row[9],
+            }
+            for row in rows
+        ]

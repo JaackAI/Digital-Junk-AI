@@ -27,6 +27,10 @@ class ScanResult:
 
 
 class ScanService:
+    """
+    Coordinates directory scanning, metadata extraction,
+    and database persistence.
+    """
 
     def __init__(
         self,
@@ -35,30 +39,36 @@ class ScanService:
         database: Database | None = None,
     ):
         self.scanner = scanner or FileScanner()
+
         self.metadata_extractor = (
             metadata_extractor or MetadataExtractor()
         )
+
         self.database = database or Database()
 
-        # Initialize database tables
         self.database.initialize()
-
-        # Add scan statistics columns
-        # to existing databases if required
         self.database.migrate_scan_statistics()
 
-    def scan(self, directory: str) -> ScanResult:
+    def scan(
+        self,
+        directory: str,
+        progress_callback=None,
+    ) -> ScanResult:
+        """
+        Scan a directory and optionally report progress.
 
-        # --------------------------------------------------
+        Args:
+            directory: Directory to scan.
+            progress_callback: Optional callback receiving:
+                current file number,
+                total files,
+                current file path.
+        """
+
         # 1. Scan directory
-        # --------------------------------------------------
-
         file_paths = self.scanner.scan_directory(directory)
 
-        # --------------------------------------------------
         # 2. Create scan record
-        # --------------------------------------------------
-
         scan_id = self.database.create_scan(directory)
 
         result = ScanResult(
@@ -67,11 +77,17 @@ class ScanService:
             scan_id=scan_id,
         )
 
-        # --------------------------------------------------
-        # 3. Extract metadata and save files
-        # --------------------------------------------------
+        total_files = len(file_paths)
 
-        for file_path in file_paths:
+        # 3. Extract metadata and save files
+        for index, file_path in enumerate(file_paths, start=1):
+
+            if progress_callback is not None:
+                progress_callback(
+                    index,
+                    total_files,
+                    file_path,
+                )
 
             try:
                 metadata = self.metadata_extractor.extract(
@@ -98,19 +114,13 @@ class ScanService:
                     )
                 )
 
-        # --------------------------------------------------
         # 4. Calculate total file size
-        # --------------------------------------------------
-
         total_size_bytes = sum(
             metadata.size_bytes
             for metadata in result.files
         )
 
-        # --------------------------------------------------
         # 5. Update scan statistics
-        # --------------------------------------------------
-
         self.database.update_scan_statistics(
             scan_id=scan_id,
             files_found=len(file_paths),
@@ -119,10 +129,7 @@ class ScanService:
             total_size_bytes=total_size_bytes,
         )
 
-        # --------------------------------------------------
         # 6. Mark scan as completed
-        # --------------------------------------------------
-
         self.database.complete_scan(scan_id)
 
         return result
