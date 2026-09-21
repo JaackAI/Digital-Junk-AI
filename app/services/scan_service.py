@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.scanner.file_scanner import FileScanner
 from app.scanner.metadata import FileMetadata, MetadataExtractor
@@ -28,8 +29,8 @@ class ScanResult:
 
 class ScanService:
     """
-    Coordinates directory scanning, metadata extraction,
-    and database persistence.
+    Coordinates directory validation, directory scanning,
+    metadata extraction, and database persistence.
     """
 
     def __init__(
@@ -50,6 +51,67 @@ class ScanService:
         # scan statistics columns exist.
         self.database.initialize()
         self.database.migrate_scan_statistics()
+
+    # ==================================================
+    # DIRECTORY VALIDATION
+    # ==================================================
+
+    def _validate_directory(self, directory: str) -> Path:
+        """
+        Validate the directory provided for scanning.
+
+        Args:
+            directory:
+                Directory path supplied by the caller.
+
+        Returns:
+            A validated Path object.
+
+        Raises:
+            ValueError:
+                If the directory path is empty.
+
+            FileNotFoundError:
+                If the directory does not exist.
+
+            NotADirectoryError:
+                If the path is not a directory.
+        """
+
+        # ----------------------------------------------
+        # Validate input type/content
+        # ----------------------------------------------
+
+        if not directory or not directory.strip():
+            raise ValueError(
+                "Directory path cannot be empty."
+            )
+
+        directory_path = Path(directory.strip())
+
+        # ----------------------------------------------
+        # Check existence
+        # ----------------------------------------------
+
+        if not directory_path.exists():
+            raise FileNotFoundError(
+                f"Directory does not exist: {directory}"
+            )
+
+        # ----------------------------------------------
+        # Check directory
+        # ----------------------------------------------
+
+        if not directory_path.is_dir():
+            raise NotADirectoryError(
+                f"Path is not a directory: {directory}"
+            )
+
+        return directory_path
+
+    # ==================================================
+    # SCAN
+    # ==================================================
 
     def scan(
         self,
@@ -75,16 +137,31 @@ class ScanService:
         """
 
         # ==================================================
-        # 1. SCAN DIRECTORY
+        # 1. VALIDATE DIRECTORY
         # ==================================================
 
-        file_paths = self.scanner.scan_directory(directory)
+        validated_directory = self._validate_directory(
+            directory
+        )
+
+        # Use the normalized path from this point onward.
+        directory = str(validated_directory)
 
         # ==================================================
-        # 2. CREATE SCAN RECORD
+        # 2. SCAN DIRECTORY
         # ==================================================
 
-        scan_id = self.database.create_scan(directory)
+        file_paths = self.scanner.scan_directory(
+            directory
+        )
+
+        # ==================================================
+        # 3. CREATE SCAN RECORD
+        # ==================================================
+
+        scan_id = self.database.create_scan(
+            directory
+        )
 
         result = ScanResult(
             files=[],
@@ -95,7 +172,7 @@ class ScanService:
         total_files = len(file_paths)
 
         # ==================================================
-        # 3. PROCESS FILES
+        # 4. PROCESS FILES
         # ==================================================
 
         for index, file_path in enumerate(
@@ -173,7 +250,7 @@ class ScanService:
                 )
 
         # ==================================================
-        # 4. CALCULATE TOTAL SIZE
+        # 5. CALCULATE TOTAL SIZE
         # ==================================================
 
         total_size_bytes = sum(
@@ -182,7 +259,7 @@ class ScanService:
         )
 
         # ==================================================
-        # 5. UPDATE SCAN STATISTICS
+        # 6. UPDATE SCAN STATISTICS
         # ==================================================
 
         self.database.update_scan_statistics(
@@ -194,13 +271,13 @@ class ScanService:
         )
 
         # ==================================================
-        # 6. MARK SCAN AS COMPLETED
+        # 7. MARK SCAN AS COMPLETED
         # ==================================================
 
         self.database.complete_scan(scan_id)
 
         # ==================================================
-        # 7. RETURN RESULT
+        # 8. RETURN RESULT
         # ==================================================
 
         return result
