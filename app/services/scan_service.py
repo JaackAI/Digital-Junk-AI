@@ -46,8 +46,8 @@ class ScanService:
 
         self.database = database or Database()
 
-        # Initialize database and ensure scan statistics
-        # columns exist.
+        # Initialize database and ensure required
+        # scan statistics columns exist.
         self.database.initialize()
         self.database.migrate_scan_statistics()
 
@@ -95,7 +95,7 @@ class ScanService:
         total_files = len(file_paths)
 
         # ==================================================
-        # 3. PROCESS EACH FILE
+        # 3. PROCESS FILES
         # ==================================================
 
         for index, file_path in enumerate(
@@ -103,7 +103,10 @@ class ScanService:
             start=1,
         ):
 
-            # Report progress before processing the file.
+            # ----------------------------------------------
+            # Report progress
+            # ----------------------------------------------
+
             if progress_callback is not None:
 
                 progress_callback(
@@ -129,7 +132,7 @@ class ScanService:
                 result.files.append(metadata)
 
                 # ------------------------------------------
-                # Save metadata to database
+                # Save metadata
                 # ------------------------------------------
 
                 self.database.save_file(
@@ -138,7 +141,7 @@ class ScanService:
                 )
 
             # ==================================================
-            # EXPECTED FILE-LEVEL ERRORS
+            # EXPECTED FILE ERRORS
             # ==================================================
 
             except (
@@ -155,7 +158,7 @@ class ScanService:
                 )
 
             # ==================================================
-            # UNEXPECTED FILE-LEVEL ERRORS
+            # UNEXPECTED FILE ERRORS
             # ==================================================
 
             except Exception as error:
