@@ -1,9 +1,19 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.database.database import Database
+from app.duplicates.duplicate_detector import DuplicateDetector
+from app.duplicates.duplicate_storage_service import (
+    DuplicateStorageService,
+)
+from app.duplicates.near_duplicate_detector import (
+    NearDuplicateDetector,
+)
+from app.duplicates.near_duplicate_storage_service import (
+    NearDuplicateStorageService,
+)
 from app.scanner.file_scanner import FileScanner
 from app.scanner.metadata import FileMetadata, MetadataExtractor
-from app.database.database import Database
 
 
 @dataclass
@@ -30,7 +40,8 @@ class ScanResult:
 class ScanService:
     """
     Coordinates directory validation, directory scanning,
-    metadata extraction, and database persistence.
+    metadata extraction, exact duplicate detection,
+    near-duplicate detection, and database persistence.
     """
 
     def __init__(
@@ -47,60 +58,50 @@ class ScanService:
 
         self.database = database or Database()
 
-        # Initialize database and ensure required
-        # scan statistics columns exist.
         self.database.initialize()
         self.database.migrate_scan_statistics()
+        self.database.migrate_duplicate_tables()
+        self.database.migrate_near_duplicate_tables()
 
-    # ==================================================
-    # DIRECTORY VALIDATION
-    # ==================================================
+        # Exact duplicate detection
+        self.duplicate_detector = DuplicateDetector()
 
-    def _validate_directory(self, directory: str) -> Path:
-        """
-        Validate the directory provided for scanning.
+        self.duplicate_storage_service = (
+            DuplicateStorageService(
+                database=self.database
+            )
+        )
 
-        Args:
-            directory:
-                Directory path supplied by the caller.
+        # Near-duplicate detection
+        self.near_duplicate_detector = (
+            NearDuplicateDetector(
+                similarity_threshold=8
+            )
+        )
 
-        Returns:
-            A validated Path object.
+        self.near_duplicate_storage_service = (
+            NearDuplicateStorageService(
+                database=self.database
+            )
+        )
 
-        Raises:
-            ValueError:
-                If the directory path is empty.
-
-            FileNotFoundError:
-                If the directory does not exist.
-
-            NotADirectoryError:
-                If the path is not a directory.
-        """
-
-        # ----------------------------------------------
-        # Validate input type/content
-        # ----------------------------------------------
-
+    def _validate_directory(
+        self,
+        directory: str,
+    ) -> Path:
         if not directory or not directory.strip():
             raise ValueError(
                 "Directory path cannot be empty."
             )
 
-        directory_path = Path(directory.strip())
-
-        # ----------------------------------------------
-        # Check existence
-        # ----------------------------------------------
+        directory_path = Path(
+            directory.strip()
+        )
 
         if not directory_path.exists():
             raise FileNotFoundError(
                 f"Directory does not exist: {directory}"
             )
-
-        # ----------------------------------------------
-        # Check directory
-        # ----------------------------------------------
 
         if not directory_path.is_dir():
             raise NotADirectoryError(
@@ -109,55 +110,20 @@ class ScanService:
 
         return directory_path
 
-    # ==================================================
-    # SCAN
-    # ==================================================
-
     def scan(
         self,
         directory: str,
         progress_callback=None,
     ) -> ScanResult:
-        """
-        Scan a directory and optionally report progress.
-
-        Args:
-            directory:
-                Directory to scan.
-
-            progress_callback:
-                Optional callback receiving:
-                current file number,
-                total files,
-                current file path.
-
-        Returns:
-            ScanResult containing successfully processed
-            files and file-level errors.
-        """
-
-        # ==================================================
-        # 1. VALIDATE DIRECTORY
-        # ==================================================
-
-        validated_directory = self._validate_directory(
-            directory
+        validated_directory = (
+            self._validate_directory(directory)
         )
 
-        # Use the normalized path from this point onward.
         directory = str(validated_directory)
-
-        # ==================================================
-        # 2. SCAN DIRECTORY
-        # ==================================================
 
         file_paths = self.scanner.scan_directory(
             directory
         )
-
-        # ==================================================
-        # 3. CREATE SCAN RECORD
-        # ==================================================
 
         scan_id = self.database.create_scan(
             directory
@@ -171,21 +137,11 @@ class ScanService:
 
         total_files = len(file_paths)
 
-        # ==================================================
-        # 4. PROCESS FILES
-        # ==================================================
-
         for index, file_path in enumerate(
             file_paths,
             start=1,
         ):
-
-            # ----------------------------------------------
-            # Report progress
-            # ----------------------------------------------
-
             if progress_callback is not None:
-
                 progress_callback(
                     index,
                     total_files,
@@ -193,33 +149,18 @@ class ScanService:
                 )
 
             try:
-
-                # ------------------------------------------
-                # Extract metadata
-                # ------------------------------------------
-
-                metadata = self.metadata_extractor.extract(
-                    file_path
+                metadata = (
+                    self.metadata_extractor.extract(
+                        file_path
+                    )
                 )
 
-                # ------------------------------------------
-                # Store successful result
-                # ------------------------------------------
-
                 result.files.append(metadata)
-
-                # ------------------------------------------
-                # Save metadata
-                # ------------------------------------------
 
                 self.database.save_file(
                     scan_id=scan_id,
                     metadata=metadata,
                 )
-
-            # ==================================================
-            # EXPECTED FILE ERRORS
-            # ==================================================
 
             except (
                 FileNotFoundError,
@@ -234,10 +175,6 @@ class ScanService:
                     )
                 )
 
-            # ==================================================
-            # UNEXPECTED FILE ERRORS
-            # ==================================================
-
             except Exception as error:
 
                 result.errors.append(
@@ -249,35 +186,68 @@ class ScanService:
                     )
                 )
 
-        # ==================================================
-        # 5. CALCULATE TOTAL SIZE
-        # ==================================================
+        # --------------------------------------------------
+        # Scan statistics
+        # --------------------------------------------------
 
         total_size_bytes = sum(
             metadata.size_bytes
             for metadata in result.files
         )
 
-        # ==================================================
-        # 6. UPDATE SCAN STATISTICS
-        # ==================================================
-
         self.database.update_scan_statistics(
             scan_id=scan_id,
             files_found=len(file_paths),
-            files_processed=result.successful_count,
+            files_processed=(
+                result.successful_count
+            ),
             files_failed=result.failed_count,
-            total_size_bytes=total_size_bytes,
+            total_size_bytes=(
+                total_size_bytes
+            ),
         )
 
-        # ==================================================
-        # 7. MARK SCAN AS COMPLETED
-        # ==================================================
+        # --------------------------------------------------
+        # Exact duplicate detection
+        # --------------------------------------------------
 
-        self.database.complete_scan(scan_id)
+        duplicate_groups = (
+            self.duplicate_detector.find_duplicates(
+                file_paths
+            )
+        )
 
-        # ==================================================
-        # 8. RETURN RESULT
-        # ==================================================
+        self.duplicate_storage_service.save_duplicate_groups(
+            scan_id=scan_id,
+            duplicate_groups=duplicate_groups,
+        )
+
+        # --------------------------------------------------
+        # Near-duplicate detection
+        # --------------------------------------------------
+
+        near_duplicate_groups = (
+            self.near_duplicate_detector
+            .find_near_duplicates(
+                file_paths
+            )
+        )
+
+        self.near_duplicate_storage_service \
+            .save_near_duplicate_groups(
+                scan_id=scan_id,
+                near_duplicate_groups=(
+                    near_duplicate_groups
+                ),
+                similarity_threshold=8,
+            )
+
+        # --------------------------------------------------
+        # Complete scan
+        # --------------------------------------------------
+
+        self.database.complete_scan(
+            scan_id
+        )
 
         return result

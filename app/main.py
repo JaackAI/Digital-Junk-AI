@@ -1,15 +1,18 @@
+
 import streamlit as st
 
-from app.services.scan_service import ScanService
-from app.services.storage_analytics_service import (
-    StorageAnalyticsService,
+from app.database.database import Database
+from app.duplicates.duplicate_analytics_service import DuplicateAnalyticsService
+from app.duplicates.near_duplicate_analytics_service import (
+    NearDuplicateAnalyticsService,
 )
-from app.utils.formatting import format_bytes
+from app.services.scan_service import ScanService
+from app.services.storage_analytics_service import StorageAnalyticsService
 
 
-# ==================================================
-# PAGE CONFIGURATION
-# ==================================================
+# ---------------------------------------------------------
+# Page Configuration
+# ---------------------------------------------------------
 
 st.set_page_config(
     page_title="Digital Junk AI",
@@ -18,522 +21,675 @@ st.set_page_config(
 )
 
 
-# ==================================================
-# SERVICES
-# ==================================================
+# ---------------------------------------------------------
+# Services
+# ---------------------------------------------------------
 
-scan_service = ScanService()
-analytics_service = StorageAnalyticsService()
+database = Database()
+
+storage_analytics_service = StorageAnalyticsService(
+    database=database
+)
+
+duplicate_analytics_service = DuplicateAnalyticsService(
+    database=database
+)
+
+near_duplicate_analytics_service = NearDuplicateAnalyticsService(
+    database=database
+)
+
+scan_service = ScanService(
+    database=database
+)
 
 
-# ==================================================
-# HEADER
-# ==================================================
+# ---------------------------------------------------------
+# Header
+# ---------------------------------------------------------
 
 st.title("🧹 Digital Junk AI")
-
-st.caption(
-    "Your AI-powered digital decluttering assistant"
-)
+st.caption("Your AI-powered digital decluttering assistant.")
 
 st.divider()
 
 
-# ==================================================
-# LOAD ANALYTICS
-# ==================================================
-
-latest_scan = analytics_service.get_latest_scan()
-
-scan_history = analytics_service.get_scan_history()
-
-
-if latest_scan:
-
-    summary = (
-        analytics_service.get_latest_scan_storage_summary()
-    )
-
-    categories = (
-        analytics_service.get_latest_scan_storage_by_category()
-    )
-
-    largest_files = (
-        analytics_service.get_latest_scan_largest_files(
-            limit=10
-        )
-    )
-
-else:
-
-    summary = {
-        "total_files": 0,
-        "total_size_bytes": 0,
-    }
-
-    categories = []
-
-    largest_files = []
-
-
-# ==================================================
-# CALCULATE DASHBOARD METRICS
-# ==================================================
-
-total_files = summary["total_files"]
-
-total_size_bytes = summary["total_size_bytes"]
-
-total_categories = len(categories)
-
-largest_file_size = (
-    largest_files[0]["size_bytes"]
-    if largest_files
-    else 0
-)
-
-
-# ==================================================
-# LATEST SCAN OVERVIEW
-# ==================================================
-
-st.subheader("📊 Latest Scan Overview")
-
-if latest_scan:
-
-    st.caption(
-        f"Showing analytics for scan #{latest_scan['id']}: "
-        f"{latest_scan['directory_path']}"
-    )
-
-else:
-
-    st.caption(
-        "No scans have been completed yet."
-    )
-
-
-# ==================================================
-# KPI CARDS
-# ==================================================
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-
-    st.metric(
-        label="Total Files",
-        value=f"{total_files:,}",
-    )
-
-with col2:
-
-    st.metric(
-        label="Storage Used",
-        value=format_bytes(
-            total_size_bytes
-        ),
-    )
-
-with col3:
-
-    st.metric(
-        label="File Categories",
-        value=total_categories,
-    )
-
-with col4:
-
-    st.metric(
-        label="Largest File",
-        value=format_bytes(
-            largest_file_size
-        ),
-    )
-
-
-st.divider()
-
-
-# ==================================================
-# STORAGE BY CATEGORY
-# ==================================================
-
-st.subheader("📁 Storage by Category")
-
-if categories:
-
-    category_names = [
-        item["category"]
-        for item in categories
-    ]
-
-    category_sizes = [
-        item["total_size_bytes"]
-        for item in categories
-    ]
-
-    chart_data = {
-        "Category": category_names,
-        "Storage": category_sizes,
-    }
-
-    st.bar_chart(
-        chart_data,
-        x="Category",
-        y="Storage",
-    )
-
-else:
-
-    st.info(
-        "No category data available yet."
-    )
-
-
-st.divider()
-
-
-# ==================================================
-# CATEGORY DETAILS
-# ==================================================
-
-st.subheader("📋 Category Details")
-
-if categories:
-
-    for category in categories:
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-
-            st.write(
-                f"**{category['category']}**"
-            )
-
-        with col2:
-
-            st.write(
-                f"{category['file_count']:,} files"
-            )
-
-        with col3:
-
-            st.write(
-                format_bytes(
-                    category["total_size_bytes"]
-                )
-            )
-
-else:
-
-    st.info(
-        "No category information available."
-    )
-
-
-st.divider()
-
-
-# ==================================================
-# LARGEST FILES
-# ==================================================
-
-st.subheader("📦 Largest Files in Latest Scan")
-
-if largest_files:
-
-    for file in largest_files:
-
-        col1, col2, col3 = st.columns(
-            [5, 1, 2]
-        )
-
-        with col1:
-
-            st.write(
-                f"**{file['file_name']}**"
-            )
-
-        with col2:
-
-            st.write(
-                file["extension"]
-            )
-
-        with col3:
-
-            st.write(
-                format_bytes(
-                    file["size_bytes"]
-                )
-            )
-
-else:
-
-    st.info(
-        "No files available yet."
-    )
-
-
-# ==================================================
-# SCAN HISTORY
-# ==================================================
-
-st.divider()
-
-st.subheader("🕘 Scan History")
-
-if scan_history:
-
-    for scan in scan_history:
-
-        scan_id = scan["id"]
-
-        directory_path = scan["directory_path"]
-
-        started_at = scan["started_at"]
-
-        completed_at = scan["completed_at"]
-
-        files_found = scan["files_found"]
-
-        files_processed = scan["files_processed"]
-
-        files_failed = scan["files_failed"]
-
-        total_size_bytes = scan["total_size_bytes"]
-
-        with st.expander(
-            f"Scan #{scan_id} — {directory_path}"
-        ):
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-
-                st.write(
-                    f"**Started:** {started_at}"
-                )
-
-                st.write(
-                    f"**Completed:** {completed_at}"
-                )
-
-                st.write(
-                    f"**Files Found:** {files_found}"
-                )
-
-                st.write(
-                    f"**Files Processed:** "
-                    f"{files_processed}"
-                )
-
-            with col2:
-
-                st.write(
-                    f"**Files Failed:** "
-                    f"{files_failed}"
-                )
-
-                st.write(
-                    f"**Total Size:** "
-                    f"{format_bytes(total_size_bytes)}"
-                )
-
-            st.write("### Files in This Scan")
-
-            scan_files = (
-                analytics_service.get_files_by_scan(
-                    scan_id
-                )
-            )
-
-            if scan_files:
-
-                for scanned_file in scan_files:
-
-                    file_col1, file_col2, file_col3 = (
-                        st.columns([5, 1, 2])
-                    )
-
-                    with file_col1:
-
-                        st.write(
-                            f"**{scanned_file['file_name']}**"
-                        )
-
-                    with file_col2:
-
-                        st.write(
-                            scanned_file["extension"]
-                        )
-
-                    with file_col3:
-
-                        st.write(
-                            format_bytes(
-                                scanned_file["size_bytes"]
-                            )
-                        )
-
-            else:
-
-                st.info(
-                    "No files found for this scan."
-                )
-
-else:
-
-    st.info(
-        "No scan history available yet."
-    )
-
-
-# ==================================================
-# SCAN SECTION
-# ==================================================
-
-st.divider()
-
-st.subheader("🔍 Scan a Folder")
+# ---------------------------------------------------------
+# Scan Section
+# ---------------------------------------------------------
+
+st.header("📂 Scan Directory")
 
 directory = st.text_input(
-    "Folder path",
-    placeholder=(
-        r"C:\Users\AMD\Desktop\Tested"
-    ),
+    "Enter directory path",
+    placeholder=r"C:\Users\YourName\Downloads",
 )
 
 
-if st.button(
-    "🚀 Start Scan",
-    type="primary",
-):
+if st.button("🔍 Start Scan", type="primary"):
 
     if not directory.strip():
-
-        st.warning(
-            "Please enter a folder path."
-        )
+        st.error("Please enter a directory path.")
 
     else:
 
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        def update_progress(current, total, file_path):
+
+            if total > 0:
+                progress = current / total
+                progress_bar.progress(progress)
+
+            status_text.text(
+                f"Scanning {current}/{total}: {file_path}"
+            )
+
         try:
 
-            with st.spinner(
-                "Scanning files..."
-            ):
-
-                progress_bar = st.progress(0)
-
-                progress_text = st.empty()
-
-                def update_progress(
-                    current_file,
-                    total_files,
-                    current_file_path,
-                ):
-                    if total_files > 0:
-
-                        progress_value = (
-                            current_file / total_files
-                        )
-
-                        progress_bar.progress(
-                            progress_value
-                        )
-
-                        progress_text.write(
-                            f"Processing file "
-                            f"{current_file} "
-                            f"of {total_files}: "
-                            f"{current_file_path.name}"
-                        )
-
-                    else:
-
-                        progress_bar.progress(1.0)
-
-                        progress_text.write(
-                            "No supported files found."
-                        )
+            with st.spinner("Scanning files..."):
 
                 result = scan_service.scan(
                     directory,
                     progress_callback=update_progress,
                 )
 
-                progress_text.success(
-                    "File processing completed."
-                )
+            progress_bar.progress(1.0)
+
+            status_text.success("Scan completed successfully.")
 
             st.success(
-                "Scan completed successfully."
+                f"Scan completed. "
+                f"{result.successful_count} files processed."
             )
 
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-
-                st.metric(
-                    "Files Found",
-                    (
-                        result.successful_count
-                        + result.failed_count
-                    ),
-                )
-
-            with col2:
-
-                st.metric(
-                    "Processed",
-                    result.successful_count,
-                )
-
-            with col3:
-
-                st.metric(
-                    "Failed",
-                    result.failed_count,
-                )
-
-            if result.errors:
+            if result.failed_count > 0:
 
                 st.warning(
-                    "Some files could not be processed."
+                    f"{result.failed_count} files could not be processed."
                 )
-
-                st.write("### Failed Files")
-
-                for scan_error in result.errors:
-
-                    st.write(
-                        f"**File:** "
-                        f"{scan_error.file_path}"
-                    )
-
-                    st.write(
-                        f"**Reason:** "
-                        f"{scan_error.error_message}"
-                    )
-
-                    st.divider()
-
-            st.rerun()
-
-        except (
-            FileNotFoundError,
-            NotADirectoryError,
-        ) as error:
-
-            st.error(
-                str(error)
-            )
 
         except Exception as error:
 
             st.error(
-                f"Unexpected error: {error}"
+                f"Scan failed: {error}"
             )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Storage Overview
+# ---------------------------------------------------------
+
+st.header("💾 Storage Overview")
+
+try:
+
+    storage_summary = (
+        storage_analytics_service
+        .get_storage_summary()
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        st.metric(
+            "Total Files",
+            storage_summary.get("total_files", 0),
+        )
+
+    with col2:
+
+        total_size_bytes = storage_summary.get(
+            "total_size_bytes",
+            0,
+        )
+
+        total_size_mb = (
+            total_size_bytes / (1024 * 1024)
+        )
+
+        st.metric(
+            "Total Storage",
+            f"{total_size_mb:.2f} MB",
+        )
+
+    with col3:
+
+        st.metric(
+            "File Types",
+            storage_summary.get(
+                "total_extensions",
+                0,
+            ),
+        )
+
+except Exception as error:
+
+    st.warning(
+        f"Storage analytics unavailable: {error}"
+    )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Storage By Extension
+# ---------------------------------------------------------
+
+st.header("📊 Storage by Extension")
+
+try:
+
+    storage_by_extension = (
+        storage_analytics_service
+        .get_storage_by_extension()
+    )
+
+    if storage_by_extension:
+
+        extension_data = []
+
+        for row in storage_by_extension:
+
+            extension_data.append(
+                {
+                    "Extension": row.get(
+                        "extension",
+                        "",
+                    ),
+                    "Files": row.get(
+                        "file_count",
+                        0,
+                    ),
+                    "Storage (MB)": round(
+                        row.get(
+                            "total_size_bytes",
+                            0,
+                        )
+                        / (1024 * 1024),
+                        2,
+                    ),
+                }
+            )
+
+        st.dataframe(
+            extension_data,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No storage data available yet."
+        )
+
+except Exception as error:
+
+    st.warning(
+        f"Unable to load extension analytics: {error}"
+    )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Storage By Category
+# ---------------------------------------------------------
+
+st.header("📁 Storage by Category")
+
+try:
+
+    storage_by_category = (
+        storage_analytics_service
+        .get_storage_by_category()
+    )
+
+    if storage_by_category:
+
+        category_data = []
+
+        for row in storage_by_category:
+
+            category_data.append(
+                {
+                    "Category": row.get(
+                        "category",
+                        "Unknown",
+                    ),
+                    "Files": row.get(
+                        "file_count",
+                        0,
+                    ),
+                    "Storage (MB)": round(
+                        row.get(
+                            "total_size_bytes",
+                            0,
+                        )
+                        / (1024 * 1024),
+                        2,
+                    ),
+                }
+            )
+
+        st.dataframe(
+            category_data,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No category data available yet."
+        )
+
+except Exception as error:
+
+    st.warning(
+        f"Unable to load category analytics: {error}"
+    )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Largest Files
+# ---------------------------------------------------------
+
+st.header("📦 Largest Files")
+
+try:
+
+    largest_files = (
+        storage_analytics_service
+        .get_largest_files(limit=10)
+    )
+
+    if largest_files:
+
+        largest_file_data = []
+
+        for file in largest_files:
+
+            largest_file_data.append(
+                {
+                    "File": file.get(
+                        "file_path",
+                        "",
+                    ),
+                    "Size (MB)": round(
+                        file.get(
+                            "size_bytes",
+                            0,
+                        )
+                        / (1024 * 1024),
+                        2,
+                    ),
+                }
+            )
+
+        st.dataframe(
+            largest_file_data,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No files available."
+        )
+
+except Exception as error:
+
+    st.warning(
+        f"Unable to load largest files: {error}"
+    )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Exact Duplicate Insights
+# ---------------------------------------------------------
+
+st.header("♻️ Duplicate Insights")
+
+try:
+
+    duplicate_summary = (
+        duplicate_analytics_service
+        .get_duplicate_summary()
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        st.metric(
+            "Duplicate Groups",
+            duplicate_summary.get(
+                "duplicate_group_count",
+                0,
+            ),
+        )
+
+    with col2:
+
+        st.metric(
+            "Duplicate Files",
+            duplicate_summary.get(
+                "duplicate_file_count",
+                0,
+            ),
+        )
+
+    with col3:
+
+        duplicate_storage_bytes = (
+            duplicate_summary.get(
+                "duplicate_storage_bytes",
+                0,
+            )
+        )
+
+        duplicate_storage_mb = (
+            duplicate_storage_bytes
+            / (1024 * 1024)
+        )
+
+        st.metric(
+            "Recoverable Storage",
+            f"{duplicate_storage_mb:.2f} MB",
+        )
+
+
+    largest_duplicate_groups = (
+        duplicate_analytics_service
+        .get_largest_duplicate_groups(
+            limit=5
+        )
+    )
+
+    if largest_duplicate_groups:
+
+        st.subheader(
+            "Largest Duplicate Groups"
+        )
+
+        duplicate_group_data = []
+
+        for group in largest_duplicate_groups:
+
+            duplicate_group_data.append(
+                {
+                    "Group ID": group.get(
+                        "id",
+                        "",
+                    ),
+                    "Files": group.get(
+                        "file_count",
+                        0,
+                    ),
+                    "Total Size (MB)": round(
+                        group.get(
+                            "total_size_bytes",
+                            0,
+                        )
+                        / (1024 * 1024),
+                        2,
+                    ),
+                    "Recoverable (MB)": round(
+                        group.get(
+                            "duplicate_size_bytes",
+                            0,
+                        )
+                        / (1024 * 1024),
+                        2,
+                    ),
+                }
+            )
+
+        st.dataframe(
+            duplicate_group_data,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No exact duplicate groups found."
+        )
+
+except Exception as error:
+
+    st.warning(
+        f"Duplicate analytics unavailable: {error}"
+    )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Near-Duplicate Insights
+# ---------------------------------------------------------
+
+st.header("🖼️ Near-Duplicate Insights")
+
+try:
+
+    near_duplicate_summary = (
+        near_duplicate_analytics_service
+        .get_near_duplicate_summary()
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        st.metric(
+            "Near-Duplicate Groups",
+            near_duplicate_summary.get(
+                "near_duplicate_group_count",
+                0,
+            ),
+        )
+
+    with col2:
+
+        st.metric(
+            "Near-Duplicate Files",
+            near_duplicate_summary.get(
+                "near_duplicate_file_count",
+                0,
+            ),
+        )
+
+    with col3:
+
+        near_duplicate_storage_bytes = (
+            near_duplicate_summary.get(
+                "duplicate_storage_bytes",
+                0,
+            )
+        )
+
+        near_duplicate_storage_mb = (
+            near_duplicate_storage_bytes
+            / (1024 * 1024)
+        )
+
+        st.metric(
+            "Recoverable Storage",
+            f"{near_duplicate_storage_mb:.2f} MB",
+        )
+
+
+    largest_near_duplicates = (
+        near_duplicate_analytics_service
+        .get_largest_near_duplicate_groups(
+            limit=5
+        )
+    )
+
+    if largest_near_duplicates:
+
+        st.subheader(
+            "Largest Near-Duplicate Groups"
+        )
+
+        near_duplicate_group_data = []
+
+        for group in largest_near_duplicates:
+
+            near_duplicate_group_data.append(
+                {
+                    "Group ID": group.get(
+                        "id",
+                        "",
+                    ),
+                    "Files": group.get(
+                        "file_count",
+                        0,
+                    ),
+                    "Total Size (MB)": round(
+                        group.get(
+                            "total_size_bytes",
+                            0,
+                        )
+                        / (1024 * 1024),
+                        2,
+                    ),
+                    "Recoverable (MB)": round(
+                        group.get(
+                            "duplicate_size_bytes",
+                            0,
+                        )
+                        / (1024 * 1024),
+                        2,
+                    ),
+                    "Threshold": group.get(
+                        "similarity_threshold",
+                        8,
+                    ),
+                }
+            )
+
+        st.dataframe(
+            near_duplicate_group_data,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No near-duplicate image groups found."
+        )
+
+except Exception as error:
+
+    st.warning(
+        f"Near-duplicate analytics unavailable: {error}"
+    )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Scan History
+# ---------------------------------------------------------
+
+st.header("🕘 Scan History")
+
+try:
+
+    scan_history = (
+        storage_analytics_service
+        .get_scan_history()
+    )
+
+    if scan_history:
+
+        scan_history_data = []
+
+        for scan in scan_history:
+
+            scan_history_data.append(
+                {
+                    "Scan ID": scan.get(
+                        "id",
+                        "",
+                    ),
+                    "Directory": scan.get(
+                        "directory_path",
+                        "",
+                    ),
+                    "Files Found": scan.get(
+                        "files_found",
+                        0,
+                    ),
+                    "Processed": scan.get(
+                        "files_processed",
+                        0,
+                    ),
+                    "Failed": scan.get(
+                        "files_failed",
+                        0,
+                    ),
+                    "Size (MB)": round(
+                        scan.get(
+                            "total_size_bytes",
+                            0,
+                        )
+                        / (1024 * 1024),
+                        2,
+                    ),
+                    "Status": scan.get(
+                        "status",
+                        "",
+                    ),
+                    "Created": scan.get(
+                        "created_at",
+                        "",
+                    ),
+                }
+            )
+
+        st.dataframe(
+            scan_history_data,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No scan history available."
+        )
+
+except Exception as error:
+
+    st.warning(
+        f"Unable to load scan history: {error}"
+    )
+
+
+st.divider()
+
+
+# ---------------------------------------------------------
+# Footer
+# ---------------------------------------------------------
+
+st.caption(
+    "Digital Junk AI — Your AI-powered digital decluttering assistant."
+)

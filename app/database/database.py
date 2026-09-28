@@ -1,27 +1,40 @@
 import sqlite3
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 from app.scanner.metadata import FileMetadata
 
 
 class Database:
-    def __init__(self, db_path: str = "data/digital_junk_ai.db"):
-        self.db_path = Path(db_path)
+    """
+    Handles SQLite database operations for Digital Junk AI.
+    """
 
-    def get_connection(self):
-        """
-        Create and return a SQLite database connection.
-        """
+    def __init__(
+        self,
+        database_path: str = "data/digital_junk_ai.db",
+    ):
+        self.database_path = Path(database_path)
 
-        self.db_path.parent.mkdir(
+        # Make sure the parent directory exists.
+        self.database_path.parent.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        connection = sqlite3.connect(self.db_path)
+    # ==================================================
+    # CONNECTION
+    # ==================================================
 
-        # Enable foreign key support
+    def get_connection(self) -> sqlite3.Connection:
+        """
+        Create and return a SQLite database connection.
+        """
+
+        connection = sqlite3.connect(
+            self.database_path
+        )
+
         connection.execute(
             "PRAGMA foreign_keys = ON"
         )
@@ -34,48 +47,64 @@ class Database:
 
     def initialize(self) -> None:
         """
-        Create database tables if they do not already exist.
+        Create the core database tables if they do not exist.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
-            # ------------------------------------------
-            # Scans table
-            # ------------------------------------------
+            # ==================================================
+            # SCANS TABLE
+            # ==================================================
 
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS scans (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                     directory_path TEXT NOT NULL,
+
                     started_at TEXT NOT NULL,
+
                     completed_at TEXT,
 
                     files_found INTEGER NOT NULL DEFAULT 0,
+
                     files_processed INTEGER NOT NULL DEFAULT 0,
+
                     files_failed INTEGER NOT NULL DEFAULT 0,
+
                     total_size_bytes INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
 
-            # ------------------------------------------
-            # Files table
-            # ------------------------------------------
+            # ==================================================
+            # FILES TABLE
+            # ==================================================
 
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                     scan_id INTEGER NOT NULL,
+
                     file_name TEXT NOT NULL,
+
                     file_path TEXT NOT NULL,
+
                     extension TEXT,
+
                     size_bytes INTEGER NOT NULL,
+
                     created_at TEXT,
+
                     modified_at TEXT,
+
                     accessed_at TEXT,
+
                     mime_type TEXT,
 
                     FOREIGN KEY (scan_id)
@@ -85,49 +114,288 @@ class Database:
                 """
             )
 
+            connection.commit()
+
     # ==================================================
-    # DATABASE MIGRATION
+    # SCAN STATISTICS MIGRATION
     # ==================================================
 
     def migrate_scan_statistics(self) -> None:
         """
-        Add scan statistics columns to an existing database.
+        Add scan statistics columns if they are missing.
 
-        CREATE TABLE IF NOT EXISTS does not modify an
-        existing table, so this migration ensures older
-        databases receive the new columns.
+        This keeps older databases compatible with the
+        current application.
         """
 
-        columns = {
-            "files_found": "INTEGER NOT NULL DEFAULT 0",
-            "files_processed": "INTEGER NOT NULL DEFAULT 0",
-            "files_failed": "INTEGER NOT NULL DEFAULT 0",
-            "total_size_bytes": "INTEGER NOT NULL DEFAULT 0",
-        }
-
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
-                "PRAGMA table_info(scans)"
+                """
+                PRAGMA table_info(scans)
+                """
             )
 
-            existing_columns = {
-                column[1]
-                for column in cursor.fetchall()
+            columns = {
+                row[1]
+                for row in cursor.fetchall()
             }
 
-            for column_name, column_definition in columns.items():
+            if "files_found" not in columns:
 
-                if column_name not in existing_columns:
+                cursor.execute(
+                    """
+                    ALTER TABLE scans
+                    ADD COLUMN files_found
+                    INTEGER NOT NULL DEFAULT 0
+                    """
+                )
 
-                    cursor.execute(
-                        f"""
-                        ALTER TABLE scans
-                        ADD COLUMN {column_name}
-                        {column_definition}
-                        """
-                    )
+            if "files_processed" not in columns:
+
+                cursor.execute(
+                    """
+                    ALTER TABLE scans
+                    ADD COLUMN files_processed
+                    INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+
+            if "files_failed" not in columns:
+
+                cursor.execute(
+                    """
+                    ALTER TABLE scans
+                    ADD COLUMN files_failed
+                    INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+
+            if "total_size_bytes" not in columns:
+
+                cursor.execute(
+                    """
+                    ALTER TABLE scans
+                    ADD COLUMN total_size_bytes
+                    INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+
+            connection.commit()
+
+    # ==================================================
+    # DUPLICATE TABLE MIGRATION
+    # ==================================================
+
+    def migrate_duplicate_tables(self) -> None:
+        """
+        Create duplicate detection tables if they do not exist.
+
+        Existing scan and file data is preserved.
+        """
+
+        with self.get_connection() as connection:
+
+            cursor = connection.cursor()
+
+            # ==================================================
+            # DUPLICATE GROUPS
+            # ==================================================
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS duplicate_groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                    scan_id INTEGER NOT NULL,
+
+                    file_hash TEXT NOT NULL,
+
+                    file_count INTEGER NOT NULL,
+
+                    total_size_bytes INTEGER NOT NULL DEFAULT 0,
+
+                    duplicate_size_bytes INTEGER NOT NULL DEFAULT 0,
+
+                    created_at TEXT NOT NULL,
+
+                    FOREIGN KEY (scan_id)
+                        REFERENCES scans(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+
+            # ==================================================
+            # DUPLICATE FILES
+            # ==================================================
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS duplicate_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                    duplicate_group_id INTEGER NOT NULL,
+
+                    file_id INTEGER NOT NULL,
+
+                    file_path TEXT NOT NULL,
+
+                    file_size_bytes INTEGER NOT NULL DEFAULT 0,
+
+                    FOREIGN KEY (duplicate_group_id)
+                        REFERENCES duplicate_groups(id)
+                        ON DELETE CASCADE,
+
+                    FOREIGN KEY (file_id)
+                        REFERENCES files(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+
+            # ==================================================
+            # INDEXES
+            # ==================================================
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_duplicate_groups_scan_id
+                ON duplicate_groups(scan_id)
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_duplicate_groups_file_hash
+                ON duplicate_groups(file_hash)
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_duplicate_files_group_id
+                ON duplicate_files(duplicate_group_id)
+                """
+            )
+
+            connection.commit()
+
+    # ==================================================
+    # NEAR-DUPLICATE TABLE MIGRATION
+    # ==================================================
+
+    def migrate_near_duplicate_tables(self) -> None:
+        """
+        Create near-duplicate detection tables if they
+        do not already exist.
+
+        Near duplicates are visually similar images
+        detected using perceptual hashing.
+        """
+
+        with self.get_connection() as connection:
+
+            cursor = connection.cursor()
+
+            # ==================================================
+            # NEAR-DUPLICATE GROUPS
+            # ==================================================
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS near_duplicate_groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                    scan_id INTEGER NOT NULL,
+
+                    representative_hash TEXT NOT NULL,
+
+                    file_count INTEGER NOT NULL,
+
+                    total_size_bytes INTEGER NOT NULL DEFAULT 0,
+
+                    duplicate_size_bytes INTEGER NOT NULL DEFAULT 0,
+
+                    similarity_threshold INTEGER NOT NULL,
+
+                    created_at TEXT NOT NULL,
+
+                    FOREIGN KEY (scan_id)
+                        REFERENCES scans(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+
+            # ==================================================
+            # NEAR-DUPLICATE FILES
+            # ==================================================
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS near_duplicate_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                    near_duplicate_group_id INTEGER NOT NULL,
+
+                    file_id INTEGER NOT NULL,
+
+                    file_path TEXT NOT NULL,
+
+                    file_size_bytes INTEGER NOT NULL DEFAULT 0,
+
+                    perceptual_hash TEXT NOT NULL,
+
+                    FOREIGN KEY (near_duplicate_group_id)
+                        REFERENCES near_duplicate_groups(id)
+                        ON DELETE CASCADE,
+
+                    FOREIGN KEY (file_id)
+                        REFERENCES files(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+
+            # ==================================================
+            # INDEXES
+            # ==================================================
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_near_duplicate_groups_scan_id
+                ON near_duplicate_groups(scan_id)
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_near_duplicate_groups_hash
+                ON near_duplicate_groups(
+                    representative_hash
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_near_duplicate_files_group_id
+                ON near_duplicate_files(
+                    near_duplicate_group_id
+                )
+                """
+            )
+
+            connection.commit()
 
     # ==================================================
     # CREATE SCAN
@@ -147,6 +415,7 @@ class Database:
         started_at = datetime.now().isoformat()
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -163,7 +432,11 @@ class Database:
                 ),
             )
 
-            return cursor.lastrowid
+            scan_id = cursor.lastrowid
+
+            connection.commit()
+
+        return scan_id
 
     # ==================================================
     # SAVE FILE
@@ -173,12 +446,16 @@ class Database:
         self,
         scan_id: int,
         metadata: FileMetadata,
-    ) -> None:
+    ) -> int:
         """
-        Save metadata for a successfully processed file.
+        Save extracted file metadata.
+
+        Returns:
+            ID of the newly inserted file.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -202,22 +479,50 @@ class Database:
                     metadata.file_path,
                     metadata.extension,
                     metadata.size_bytes,
-
-                    metadata.created_at.isoformat()
-                    if metadata.created_at
-                    else None,
-
-                    metadata.modified_at.isoformat()
-                    if metadata.modified_at
-                    else None,
-
-                    metadata.accessed_at.isoformat()
-                    if metadata.accessed_at
-                    else None,
-
+                    metadata.created_at,
+                    metadata.modified_at,
+                    metadata.accessed_at,
                     metadata.mime_type,
                 ),
             )
+
+            file_id = cursor.lastrowid
+
+            connection.commit()
+
+        return file_id
+
+    # ==================================================
+    # COMPLETE SCAN
+    # ==================================================
+
+    def complete_scan(
+        self,
+        scan_id: int,
+    ) -> None:
+        """
+        Mark a scan as completed.
+        """
+
+        completed_at = datetime.now().isoformat()
+
+        with self.get_connection() as connection:
+
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                UPDATE scans
+                SET completed_at = ?
+                WHERE id = ?
+                """,
+                (
+                    completed_at,
+                    scan_id,
+                ),
+            )
+
+            connection.commit()
 
     # ==================================================
     # UPDATE SCAN STATISTICS
@@ -232,10 +537,11 @@ class Database:
         total_size_bytes: int,
     ) -> None:
         """
-        Update statistics for a completed scan.
+        Update statistics for a scan.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -257,47 +563,19 @@ class Database:
                 ),
             )
 
-    # ==================================================
-    # COMPLETE SCAN
-    # ==================================================
-
-    def complete_scan(
-        self,
-        scan_id: int,
-    ) -> None:
-        """
-        Mark a scan as completed.
-        """
-
-        completed_at = datetime.now().isoformat()
-
-        with self.get_connection() as connection:
-            cursor = connection.cursor()
-
-            cursor.execute(
-                """
-                UPDATE scans
-                SET completed_at = ?
-                WHERE id = ?
-                """,
-                (
-                    completed_at,
-                    scan_id,
-                ),
-            )
+            connection.commit()
 
     # ==================================================
-    # GET SCAN HISTORY
+    # SCAN HISTORY
     # ==================================================
 
     def get_scan_history(self) -> list[dict]:
         """
-        Return all previous scans.
-
-        Scans are ordered from newest to oldest.
+        Return all scans, newest first.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -341,13 +619,11 @@ class Database:
         scan_id: int,
     ) -> dict | None:
         """
-        Return a single scan using its ID.
-
-        Returns:
-            Scan dictionary or None if not found.
+        Return a scan by ID.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -392,10 +668,11 @@ class Database:
         scan_id: int,
     ) -> list[dict]:
         """
-        Return all files belonging to a specific scan.
+        Return all files belonging to a scan.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -437,18 +714,16 @@ class Database:
         ]
 
     # ==================================================
-    # GET LATEST SCAN
+    # LATEST SCAN
     # ==================================================
 
     def get_latest_scan(self) -> dict | None:
         """
         Return the most recent scan.
-
-        Returns:
-            Latest scan dictionary or None if no scans exist.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -483,24 +758,28 @@ class Database:
             "files_failed": row[6],
             "total_size_bytes": row[7],
         }
-        # ==================================================
-    # STORAGE ANALYTICS
+
+    # ==================================================
+    # STORAGE SUMMARY
     # ==================================================
 
     def get_storage_summary(self) -> dict:
         """
-        Return overall storage statistics across all
-        successfully processed files.
+        Return total file count and storage usage.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
                 """
                 SELECT
                     COUNT(*) AS total_files,
-                    COALESCE(SUM(size_bytes), 0) AS total_size_bytes
+                    COALESCE(
+                        SUM(size_bytes),
+                        0
+                    ) AS total_size_bytes
                 FROM files
                 """
             )
@@ -511,50 +790,20 @@ class Database:
             "total_files": row[0],
             "total_size_bytes": row[1],
         }
-        # ==================================================
-    # LATEST SCAN STORAGE SUMMARY
+
     # ==================================================
-
-    def get_latest_scan_storage_summary(self) -> dict:
-        """
-        Return storage statistics for the latest scan only.
-        """
-
-        with self.get_connection() as connection:
-            cursor = connection.cursor()
-
-            cursor.execute(
-                """
-                SELECT
-                    COUNT(*) AS total_files,
-                    COALESCE(SUM(size_bytes), 0)
-                FROM files
-                WHERE scan_id = (
-                    SELECT id
-                    FROM scans
-                    ORDER BY id DESC
-                    LIMIT 1
-                )
-                """
-            )
-
-            row = cursor.fetchone()
-
-        return {
-            "total_files": row[0],
-            "total_size_bytes": row[1],
-        }
-        # ==================================================
     # STORAGE BY EXTENSION
     # ==================================================
 
-    def get_storage_by_extension(self) -> list[dict]:
+    def get_storage_by_extension(
+        self,
+    ) -> list[dict]:
         """
-        Return file count and total storage grouped
-        by file extension.
+        Return storage grouped by extension.
         """
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -562,7 +811,10 @@ class Database:
                 SELECT
                     extension,
                     COUNT(*) AS file_count,
-                    COALESCE(SUM(size_bytes), 0) AS total_size_bytes
+                    COALESCE(
+                        SUM(size_bytes),
+                        0
+                    ) AS total_size_bytes
                 FROM files
                 GROUP BY extension
                 ORDER BY total_size_bytes DESC
@@ -579,14 +831,16 @@ class Database:
             }
             for row in rows
         ]
-        # ==================================================
+
+    # ==================================================
     # STORAGE BY CATEGORY
     # ==================================================
 
-    def get_storage_by_category(self) -> list[dict]:
+    def get_storage_by_category(
+        self,
+    ) -> list[dict]:
         """
-        Return file count and total storage grouped
-        into logical file categories.
+        Return storage grouped into user-friendly categories.
         """
 
         category_map = {
@@ -602,6 +856,7 @@ class Database:
         }
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -609,7 +864,10 @@ class Database:
                 SELECT
                     extension,
                     COUNT(*) AS file_count,
-                    COALESCE(SUM(size_bytes), 0) AS total_size_bytes
+                    COALESCE(
+                        SUM(size_bytes),
+                        0
+                    ) AS total_size_bytes
                 FROM files
                 GROUP BY extension
                 ORDER BY total_size_bytes DESC
@@ -621,33 +879,45 @@ class Database:
         categories = {}
 
         for row in rows:
+
             extension = row[0]
+
             file_count = row[1]
+
             total_size_bytes = row[2]
 
             category = category_map.get(
-                extension.lower() if extension else "",
+                extension.lower()
+                if extension
+                else "",
                 "Other",
             )
 
             if category not in categories:
+
                 categories[category] = {
                     "category": category,
                     "file_count": 0,
                     "total_size_bytes": 0,
                 }
 
-            categories[category]["file_count"] += file_count
-            categories[category]["total_size_bytes"] += (
-                total_size_bytes
-            )
+            categories[category][
+                "file_count"
+            ] += file_count
+
+            categories[category][
+                "total_size_bytes"
+            ] += total_size_bytes
 
         return sorted(
             categories.values(),
-            key=lambda item: item["total_size_bytes"],
+            key=lambda item: item[
+                "total_size_bytes"
+            ],
             reverse=True,
         )
-        # ==================================================
+
+    # ==================================================
     # LARGEST FILES
     # ==================================================
 
@@ -656,19 +926,14 @@ class Database:
         limit: int = 10,
     ) -> list[dict]:
         """
-        Return the largest files stored in the database.
-
-        Args:
-            limit: Maximum number of files to return.
-
-        Returns:
-            List of file information ordered by size.
+        Return the largest files.
         """
 
         if limit <= 0:
             return []
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -708,14 +973,56 @@ class Database:
             }
             for row in rows
         ]
-        # ==================================================
+
+    # ==================================================
+    # LATEST SCAN STORAGE SUMMARY
+    # ==================================================
+
+    def get_latest_scan_storage_summary(
+        self,
+    ) -> dict:
+        """
+        Return storage summary for the latest scan.
+        """
+
+        with self.get_connection() as connection:
+
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_files,
+                    COALESCE(
+                        SUM(size_bytes),
+                        0
+                    )
+                FROM files
+                WHERE scan_id = (
+                    SELECT id
+                    FROM scans
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
+                """
+            )
+
+            row = cursor.fetchone()
+
+        return {
+            "total_files": row[0],
+            "total_size_bytes": row[1],
+        }
+
+    # ==================================================
     # LATEST SCAN STORAGE BY CATEGORY
     # ==================================================
 
-    def get_latest_scan_storage_by_category(self) -> list[dict]:
+    def get_latest_scan_storage_by_category(
+        self,
+    ) -> list[dict]:
         """
-        Return category-wise storage statistics
-        for the latest scan only.
+        Return category storage for the latest scan.
         """
 
         category_map = {
@@ -731,6 +1038,7 @@ class Database:
         }
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -738,7 +1046,10 @@ class Database:
                 SELECT
                     extension,
                     COUNT(*) AS file_count,
-                    COALESCE(SUM(size_bytes), 0)
+                    COALESCE(
+                        SUM(size_bytes),
+                        0
+                    ) AS total_size_bytes
                 FROM files
                 WHERE scan_id = (
                     SELECT id
@@ -747,7 +1058,7 @@ class Database:
                     LIMIT 1
                 )
                 GROUP BY extension
-                ORDER BY SUM(size_bytes) DESC
+                ORDER BY total_size_bytes DESC
                 """
             )
 
@@ -756,33 +1067,45 @@ class Database:
         categories = {}
 
         for row in rows:
+
             extension = row[0]
+
             file_count = row[1]
+
             total_size_bytes = row[2]
 
             category = category_map.get(
-                extension.lower() if extension else "",
+                extension.lower()
+                if extension
+                else "",
                 "Other",
             )
 
             if category not in categories:
+
                 categories[category] = {
                     "category": category,
                     "file_count": 0,
                     "total_size_bytes": 0,
                 }
 
-            categories[category]["file_count"] += file_count
-            categories[category]["total_size_bytes"] += (
-                total_size_bytes
-            )
+            categories[category][
+                "file_count"
+            ] += file_count
+
+            categories[category][
+                "total_size_bytes"
+            ] += total_size_bytes
 
         return sorted(
             categories.values(),
-            key=lambda item: item["total_size_bytes"],
+            key=lambda item: item[
+                "total_size_bytes"
+            ],
             reverse=True,
         )
-        # ==================================================
+
+    # ==================================================
     # LATEST SCAN LARGEST FILES
     # ==================================================
 
@@ -791,13 +1114,14 @@ class Database:
         limit: int = 10,
     ) -> list[dict]:
         """
-        Return the largest files from the latest scan only.
+        Return largest files from the latest scan.
         """
 
         if limit <= 0:
             return []
 
         with self.get_connection() as connection:
+
             cursor = connection.cursor()
 
             cursor.execute(
@@ -843,3 +1167,195 @@ class Database:
             }
             for row in rows
         ]
+
+    # ==================================================
+    # SAVE DUPLICATE GROUP
+    # ==================================================
+
+    def save_duplicate_group(
+        self,
+        scan_id: int,
+        file_hash: str,
+        file_count: int,
+        total_size_bytes: int,
+        duplicate_size_bytes: int,
+    ) -> int:
+        """
+        Save a duplicate group and return its database ID.
+        """
+
+        created_at = datetime.now().isoformat()
+
+        with self.get_connection() as connection:
+
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO duplicate_groups (
+                    scan_id,
+                    file_hash,
+                    file_count,
+                    total_size_bytes,
+                    duplicate_size_bytes,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scan_id,
+                    file_hash,
+                    file_count,
+                    total_size_bytes,
+                    duplicate_size_bytes,
+                    created_at,
+                ),
+            )
+
+            duplicate_group_id = cursor.lastrowid
+
+            connection.commit()
+
+        return duplicate_group_id
+
+    # ==================================================
+    # SAVE DUPLICATE FILE
+    # ==================================================
+
+    def save_duplicate_file(
+        self,
+        duplicate_group_id: int,
+        file_id: int,
+        file_path: str,
+        file_size_bytes: int,
+    ) -> int:
+        """
+        Save a file belonging to a duplicate group.
+        """
+
+        with self.get_connection() as connection:
+
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO duplicate_files (
+                    duplicate_group_id,
+                    file_id,
+                    file_path,
+                    file_size_bytes
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    duplicate_group_id,
+                    file_id,
+                    file_path,
+                    file_size_bytes,
+                ),
+            )
+
+            duplicate_file_id = cursor.lastrowid
+
+            connection.commit()
+
+        return duplicate_file_id
+
+    # ==================================================
+    # SAVE NEAR-DUPLICATE GROUP
+    # ==================================================
+
+    def save_near_duplicate_group(
+        self,
+        scan_id: int,
+        representative_hash: str,
+        file_count: int,
+        total_size_bytes: int,
+        duplicate_size_bytes: int,
+        similarity_threshold: int,
+    ) -> int:
+        """
+        Save a near-duplicate group and return its database ID.
+        """
+
+        created_at = datetime.now().isoformat()
+
+        with self.get_connection() as connection:
+
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO near_duplicate_groups (
+                    scan_id,
+                    representative_hash,
+                    file_count,
+                    total_size_bytes,
+                    duplicate_size_bytes,
+                    similarity_threshold,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scan_id,
+                    representative_hash,
+                    file_count,
+                    total_size_bytes,
+                    duplicate_size_bytes,
+                    similarity_threshold,
+                    created_at,
+                ),
+            )
+
+            near_duplicate_group_id = cursor.lastrowid
+
+            connection.commit()
+
+        return near_duplicate_group_id
+
+    # ==================================================
+    # SAVE NEAR-DUPLICATE FILE
+    # ==================================================
+
+    def save_near_duplicate_file(
+        self,
+        near_duplicate_group_id: int,
+        file_id: int,
+        file_path: str,
+        file_size_bytes: int,
+        perceptual_hash: str,
+    ) -> int:
+        """
+        Save a file belonging to a near-duplicate group.
+        """
+
+        with self.get_connection() as connection:
+
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO near_duplicate_files (
+                    near_duplicate_group_id,
+                    file_id,
+                    file_path,
+                    file_size_bytes,
+                    perceptual_hash
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    near_duplicate_group_id,
+                    file_id,
+                    file_path,
+                    file_size_bytes,
+                    perceptual_hash,
+                ),
+            )
+
+            near_duplicate_file_id = cursor.lastrowid
+
+            connection.commit()
+
+        return near_duplicate_file_id
